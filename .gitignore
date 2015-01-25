@@ -41,3 +41,14 @@ $RECYCLE.BIN/
 Network Trash Folder
 Temporary Items
 .apdisk
+*.tlog
+*.dll
+Debug/main.obj
+Debug/PostProcessing.lastbuildstate
+Debug/PostProcessing.log
+Debug/vc110.idb
+Debug/vc110.pdb
+Release/main.obj
+Release/PostProcessing.lastbuildstate
+Release/PostProcessing.log
+Release/vc110.pdb
