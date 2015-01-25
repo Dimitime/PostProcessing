@@ -13,67 +13,118 @@
 #include <glm/gtx/transform2.hpp>
 #include <glm/glm.hpp>
 
-#define WINDOW_WIDTH 1000
-#define WINDOW_HEIGHT 1000
-#define NUMBER_MODELS 3
+#define WINDOW_WIDTH 1024
+#define WINDOW_HEIGHT 768
 
+//Shaders
+GLuint phongshader,ppshader;
 //OGL Buffer objects
-GLuint phongshader,flatshader;
-GLuint vao;
-GLuint vbo[2*NUMBER_MODELS];
+GLuint vao, vbo[2], qvbo, fbo;
+//FBO texture/depth
+GLuint tex, depthbuffer;
+GLenum DrawBuffers[1] = {GL_COLOR_ATTACHMENT0};
 
-std::vector<glm::vec3> vertices[NUMBER_MODELS];
-std::vector<glm::vec3> normals[NUMBER_MODELS];
-std::vector<GLushort> faces[NUMBER_MODELS];
+std::vector<glm::vec3> vertices;
+std::vector<glm::vec3> normals;
+std::vector<GLushort> faces;
 
 glm::mat4 Projection = glm::ortho(-0.35,0.35,-0.35,0.35);
 glm::mat4 View = glm::lookAt(glm::vec3(0.0f,0.0f,1.0f), glm::vec3(0.0f,0.0f,0.0f), glm::vec3(0.0f,1.0f,0.0f));
-glm::mat4 Model[4] = { glm::mat4(1.f), glm::mat4(1.f),  glm::mat4(1.f),  glm::mat4(1.f) };
+glm::mat4 Model = glm::mat4(1.f);
 
-glm::vec3 center(std::vector<glm::vec3> pos);
-static void disp(void) {
+GLfloat quad[] = {
+    -1.0f, -1.0f, 0.0f,
+    1.0f, -1.0f, 0.0f,
+    -1.0f,  1.0f, 0.0f,
+    -1.0f,  1.0f, 0.0f,
+    1.0f, -1.0f, 0.0f,
+    1.0f,  1.0f, 0.0f,
+};
+
+static void preprocess() {
 	glClearColor(0.0, 0.0, 0.0, 1.0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	for (size_t i=0; i<NUMBER_MODELS; i++) {
-		//Vertex positions
-		glBindBuffer(GL_ARRAY_BUFFER, vbo[i]);
-		glEnableVertexAttribArray(0);
-		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
-		glBindBuffer(GL_ARRAY_BUFFER, vbo[NUMBER_MODELS+i]);	
-		//Vertex normals
-		glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0 );
-		glEnableVertexAttribArray(1);
+	//Vertex positions
+	glBindBuffer(GL_ARRAY_BUFFER, vbo[0]);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+	
+	//Vertex normals
+	glBindBuffer(GL_ARRAY_BUFFER, vbo[1]);	
+	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0 );
+	glEnableVertexAttribArray(1);
 
-		GLuint m,v,p;
-		//Draw the models
-		if (i==0) {
-			glUseProgram(phongshader);
-			m = glGetUniformLocation(phongshader, "model");
-			v = glGetUniformLocation(phongshader, "view");
-			p = glGetUniformLocation(phongshader, "projection");
-		}
-		else {
-			glUseProgram(flatshader);
-			m = glGetUniformLocation(flatshader, "model");
-			v = glGetUniformLocation(flatshader, "view");
-			p = glGetUniformLocation(flatshader, "projection");
-		}
+	GLuint m,v,p;
+	//Draw the models
+	glUseProgram(phongshader);
+	m = glGetUniformLocation(phongshader, "model");
+	v = glGetUniformLocation(phongshader, "view");
+	p = glGetUniformLocation(phongshader, "projection");
 
-		glUniformMatrix4fv(m, 1, GL_FALSE, &Model[i][0][0]);
-		glUniformMatrix4fv(v, 1, GL_FALSE, &View[0][0]);
-		glUniformMatrix4fv(p, 1, GL_FALSE, &Projection[0][0]);
+	glUniformMatrix4fv(m, 1, GL_FALSE, &Model[0][0]);
+	glUniformMatrix4fv(v, 1, GL_FALSE, &View[0][0]);
+	glUniformMatrix4fv(p, 1, GL_FALSE, &Projection[0][0]);
 
-		glDrawArrays(GL_TRIANGLES, 0, vertices[i].size());
-	}
-	//unbind everything
-	//glDisableVertexAttribArray(1);
+	//Render to our framebuffer
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glDrawArrays(GL_TRIANGLES, 0, vertices.size());
+
+	glDisableVertexAttribArray(1);
 	glDisableVertexAttribArray(0);
+}
+
+static void postprocess(){
+	glClearColor(0.0, 0.0, 0.0, 1.0);
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+ 
+	glUseProgram(ppshader);
+
+	// Bind our texture in Texture Unit 0
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	
+	GLuint texID = glGetUniformLocation(ppshader, "texture");
+	GLuint tID = glGetUniformLocation(ppshader, "t");
+	glUniform1i(texID, 0);
+
+	GLfloat t = glutGet(GLUT_ELAPSED_TIME) / 1000.0 * 2*3.14159 * .75;
+	glUniform1f(tID, t);
+
+	glEnableVertexAttribArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, qvbo);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+
+	glDrawArrays(GL_TRIANGLES, 0, 6);
+
+	glDisableVertexAttribArray(0);
+}
+
+static void disp(void) {
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glViewport(0,0,WINDOW_WIDTH,WINDOW_HEIGHT);
+	preprocess();
+
+	//Render the quad
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glViewport(0,0,WINDOW_WIDTH,WINDOW_HEIGHT);
+	postprocess();
+
+	glutSwapBuffers();
+
+	//unbind everything
 	glUseProgram(0);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glutSwapBuffers();
 }
 
+static void idle() {
+	int timems = glutGet(GLUT_ELAPSED_TIME);
+
+	if (timems % 100 == 0) {
+        glutPostRedisplay();
+	}
+}
 static void keyboard(unsigned char key, int x, int y) {
     switch (key) {
 		case 27:
@@ -259,47 +310,61 @@ static void init(void) {
 	glBindVertexArray(vao);
 
 	//Load the shaders
-	phongshader = loadShaders("Shaders/phong.vertexshader", "Shaders/phong.fragmentshader");
-	flatshader = loadShaders("Shaders/fphong.vertexshader", "Shaders/fphong.fragmentshader");
+	phongshader = loadShaders("Shaders/phong.vs", "Shaders/phong.fs");
+	ppshader = loadShaders("Shaders/pp.vs", "Shaders/pp.fs");
 
 	//Load the models
-	loadObj("Meshes/me100k.obj",vertices[0],normals[0],faces[0]);
-	std::cout << "First mesh loaded" << std::endl;
-	loadObj("Meshes/me1k.obj"  ,vertices[1],normals[1],faces[1]);
-	std::cout << "Second mesh loaded" << std::endl;
-	loadObj("Meshes/me100.obj" ,vertices[2],normals[2],faces[2]);
-	std::cout << "Third mesh loaded" << std::endl;
-	//loadObj("Meshes/me10.obj"  ,vertices[3],normals[3],faces[3]);
-	std::cout << "Fourth mesh loaded" << std::endl;
+	loadObj("Meshes/me100k.obj",vertices,normals,faces);
+	std::cout << "mesh loaded" << std::endl;
 	
-	Model[0] = glm::scale(Model[0], glm::vec3(1.5f,1.5f,1.5f));
+	Model = glm::scale(Model, glm::vec3(1.5f,1.5f,1.5f));
+	Model = glm::translate(Model, glm::vec3(0.0f,0.13f,0.0f));
 
-	Model[0] = glm::translate(Model[0], glm::vec3(0.0f,0.13f,0.0f));
-	Model[1] = glm::translate(Model[1], glm::vec3(-0.2f,-0.13f,0.0f));
-	Model[2] = glm::translate(Model[2], glm::vec3(0.2f,-0.13f,0.0f));
-	//Model[3] = glm::translate(Model[3], glm::vec3(0.2f,-0.15f, 0.0f));
+	Model = glm::translate(Model, center(vertices));
+	Model = glm::rotate(Model, 1.45f, glm::vec3(-1.0f, 0.0f, 0.0f));
+	Model = glm::rotate(Model, 0.1f, glm::vec3(0.0f, 1.0f, 0.0f));
+	Model = glm::translate(Model, -center(vertices));
 
-	//Orient the meshes properly
-	for (size_t i=0; i<NUMBER_MODELS; i++) {
-		Model[i] = glm::translate(Model[i], center(vertices[i]));
-		Model[i] = glm::rotate(Model[i], 1.45f, glm::vec3(-1.0f, 0.0f, 0.0f));
-		Model[i] = glm::rotate(Model[i], 0.1f, glm::vec3(0.0f, 1.0f, 0.0f));
-		Model[i] = glm::translate(Model[i], -center(vertices[i]));
-	}
 	//Create vertex buffer object
-	glGenBuffers(2*NUMBER_MODELS, vbo);
+	glGenBuffers(2, vbo);
 
-	for (size_t i=0; i<NUMBER_MODELS; i++) {
-		glBindBuffer(GL_ARRAY_BUFFER, vbo[i]);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo[0]);
 	
-		//Initialize the vbo to the initial positions
-		glBufferData(GL_ARRAY_BUFFER, vertices[i].size() * sizeof(glm::vec3), &vertices[i][0], GL_STREAM_DRAW);
+	//Initialize the vbo to the initial positions
+	glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(glm::vec3), &vertices[0], GL_STREAM_DRAW);
 
-		glEnableVertexAttribArray(0);
-		glBindBuffer(GL_ARRAY_BUFFER, vbo[NUMBER_MODELS+i]);
-		glBufferData(GL_ARRAY_BUFFER, normals[i].size() * sizeof(glm::vec3), &normals[i][0], GL_STREAM_DRAW);
-		glEnableVertexAttribArray(1);
-	}
+	glEnableVertexAttribArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo[1]);
+	glBufferData(GL_ARRAY_BUFFER, normals.size() * sizeof(glm::vec3), &normals[0], GL_STREAM_DRAW);
+	glEnableVertexAttribArray(1);
+
+	//Create the FBO we will render to
+	glGenFramebuffers(1, &fbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+	//The texture we're going to render to
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexImage2D(GL_TEXTURE_2D, 0,GL_RGB, WINDOW_WIDTH, WINDOW_HEIGHT, 0,GL_RGB, GL_UNSIGNED_BYTE, 0);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+
+	// The depth buffer
+	glGenRenderbuffers(1, &depthbuffer);
+	glBindRenderbuffer(GL_RENDERBUFFER, depthbuffer);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, WINDOW_WIDTH, WINDOW_HEIGHT);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthbuffer);
+
+	glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, tex, 0);
+	glDrawBuffers(1, DrawBuffers);
+	// Always check that our framebuffer is ok
+	if(glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+		exit(0);
+
+	//Generate the quad buffer
+	glGenBuffers(1, &qvbo);
+	glBindBuffer(GL_ARRAY_BUFFER, qvbo);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
 
 	std::cout <<"Buffer setup complete" << std::endl;
 }
@@ -319,7 +384,7 @@ int main(int argc, char** argv) {
 	printf("GLSL Version  :%s\n",glGetString(GL_SHADING_LANGUAGE_VERSION));
 
 	glutDisplayFunc(&disp);
-    //glutIdleFunc(&idle);
+    glutIdleFunc(&idle);
     glutKeyboardFunc(&keyboard);
 
 	glewExperimental=GL_TRUE;
