@@ -1,3 +1,5 @@
+#define _USE_MATH_DEFINES
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
@@ -17,12 +19,15 @@
 #define WINDOW_HEIGHT 768
 
 //Shaders
-GLuint phongshader,ppshader;
+GLuint phongshader,ppshader,kernelshader;
 //OGL Buffer objects
 GLuint vao, vbo[2], qvbo, fbo;
 //FBO texture/depth
 GLuint tex, depthbuffer;
 GLenum DrawBuffers[1] = {GL_COLOR_ATTACHMENT0};
+
+//control for shaders
+int shader = 0;
 
 std::vector<glm::vec3> vertices;
 std::vector<glm::vec3> normals;
@@ -74,23 +79,116 @@ static void preprocess() {
 	glDisableVertexAttribArray(0);
 }
 
-static void postprocess(){
-	glClearColor(0.0, 0.0, 0.0, 1.0);
-	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
- 
-	glUseProgram(ppshader);
+void passthrough() {
+	glUseProgram(kernelshader);
+	
+	GLuint texID = glGetUniformLocation(kernelshader, "texture");
+	GLuint kID = glGetUniformLocation(kernelshader, "kernel");
+	GLuint rID = glGetUniformLocation(kernelshader, "radius");
+	glm::mat3 kernel = glm::mat3(0, 0, 0,
+								 0, 1, 0,
+								 0, 0, 0);
+	float radius = 1.0f / 300.0f;
+	
+	glUniformMatrix3fv(kID, 1, GL_FALSE, &kernel[0][0]);
+	glUniform1f(rID, radius);
+	glUniform1i(texID, 0);
+}
 
-	// Bind our texture in Texture Unit 0
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, tex);
+void sharpen_kernel() {
+	glUseProgram(kernelshader);
+	
+	GLuint texID = glGetUniformLocation(kernelshader, "texture");
+	GLuint kID = glGetUniformLocation(kernelshader, "kernel");
+	GLuint rID = glGetUniformLocation(kernelshader, "radius");
+	glm::mat3 kernel = glm::mat3(-1, -1, -1,
+								 -1,  9, -1,
+								 -1, -1, -1);
+	float radius = 1.0f / 300.0f;
+	
+	glUniformMatrix3fv(kID, 1, GL_FALSE, &kernel[0][0]);
+	glUniform1f(rID, radius);
+	glUniform1i(texID, 0);
+}
+
+void gauss_kernel() {
+	//float *gauss_matrix = (float *) malloc (sizeof (float) * (2*radius+1) * (2*radius+1));
+	glm::mat3 kernel = glm::mat3(1.0);
+    float g_coeff = 1/(2*M_PI*pow((1.0f/3.0f),2));
+    float tsigmas = 2*pow((1.0f/3.0f),2);
+    float mid = 3.0f/2.0f;
+    float g_sum = 0.0;
+
+    //precompute the gaussian matrix
+    for (int j=0; j<3; j++) {
+       for (int i=0; i<3; i++) {
+          float gauss_value = g_coeff*exp( -( (pow(i-mid,2)+pow(j-mid,2))/(tsigmas) ) );
+          kernel[i][j] = gauss_value;
+          g_sum += gauss_value;
+       }
+    }
+
+    //normalize the kernel
+    for (int j=0; j<3; j++) {
+       for (int i=0; i<3; i++) {
+          kernel[i][j] = kernel[i][j]/g_sum;
+       }
+    }
+	
+	float radius = 5.0f / 300.0f;
+
+	glUseProgram(kernelshader);
+	
+	GLuint texID = glGetUniformLocation(kernelshader, "texture");
+	GLuint kID = glGetUniformLocation(kernelshader, "kernel");
+	GLuint rID = glGetUniformLocation(kernelshader, "radius");
+	
+	glUniformMatrix3fv(kID, 1, GL_FALSE, &kernel[0][0]);
+	glUniform1f(rID, radius);
+	glUniform1i(texID, 0);
+}
+
+void wave() {
+	GLfloat t = glutGet(GLUT_ELAPSED_TIME)/1000.0f * 2*(float)M_PI;
+
+	glUseProgram(ppshader);
 	
 	GLuint texID = glGetUniformLocation(ppshader, "texture");
 	GLuint tID = glGetUniformLocation(ppshader, "t");
 	glUniform1i(texID, 0);
-
-	GLfloat t = glutGet(GLUT_ELAPSED_TIME) / 1000.0 * 2*3.14159 * .75;
 	glUniform1f(tID, t);
+}
 
+void choose_shader() {
+	switch (shader) {
+		case 0:
+			passthrough();
+			break;
+		case 1:
+			wave();
+			break;
+		case 2:
+			sharpen_kernel();
+			break;
+		case 3:
+			gauss_kernel();
+			break;
+		default:
+			wave();
+			break;
+	}
+}
+
+static void postprocess(){
+	glClearColor(0.0, 0.0, 0.0, 1.0);
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+	
+	choose_shader();
+
+
+	// Bind our texture in Texture Unit 0
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, tex);
 	glEnableVertexAttribArray(0);
 	glBindBuffer(GL_ARRAY_BUFFER, qvbo);
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
@@ -125,8 +223,21 @@ static void idle() {
         glutPostRedisplay();
 	}
 }
+
 static void keyboard(unsigned char key, int x, int y) {
     switch (key) {
+		case '0':
+			shader = 0;
+			break;
+		case '1':
+			shader = 1;
+			break;
+		case '2':
+			shader = 2;
+			break;
+		case '3':
+			shader = 3;
+			break;
 		case 27:
 			exit(0);
     }
@@ -312,13 +423,14 @@ static void init(void) {
 	//Load the shaders
 	phongshader = loadShaders("Shaders/phong.vs", "Shaders/phong.fs");
 	ppshader = loadShaders("Shaders/pp.vs", "Shaders/pp.fs");
+	kernelshader = loadShaders("Shaders/pp.vs", "Shaders/ks.fs");
 
 	//Load the models
 	loadObj("Meshes/me100k.obj",vertices,normals,faces);
 	std::cout << "mesh loaded" << std::endl;
 	
 	Model = glm::scale(Model, glm::vec3(1.5f,1.5f,1.5f));
-	Model = glm::translate(Model, glm::vec3(0.0f,0.13f,0.0f));
+	Model = glm::translate(Model, glm::vec3(0.0f,0.05f,0.0f));
 
 	Model = glm::translate(Model, center(vertices));
 	Model = glm::rotate(Model, 1.45f, glm::vec3(-1.0f, 0.0f, 0.0f));
