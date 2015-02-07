@@ -17,8 +17,9 @@ void main(){
 	{
 		for (int i=-1; i<=1; i++)
 		{
-			//int index = (i+1)*3+(j+1);
-			col += kernel[i+1][j+1]*vec3(texture2D(texture, vec2(texcoord.x+i*radius, texcoord.y+j*radius)));
+			float x = clamp(texcoord.x+i*radius,0.0,1.0);
+			float y = clamp(texcoord.y+j*radius,0.0,1.0);
+			col += kernel[i+1][j+1]*vec3(texture2D(texture, vec2(x,y)));
 		}
 	}
     color = vec4(col, 1.0);

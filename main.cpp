@@ -19,12 +19,12 @@
 #define WINDOW_HEIGHT 768
 
 //Shaders
-GLuint phongshader,ppshader,kernelshader;
+GLuint phongshader,ppshader,kernelshader,bloomshader,bloomblurh,bloomblurv;
 //OGL Buffer objects
 GLuint vao, vbo[2], qvbo, fbo;
 //FBO texture/depth
-GLuint tex, depthbuffer;
-GLenum DrawBuffers[1] = {GL_COLOR_ATTACHMENT0};
+GLuint tex[2], depthbuffer;
+GLenum drawBuffers[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
 
 //control for shaders
 int shader = 0;
@@ -43,10 +43,10 @@ GLfloat quad[] = {
     -1.0f,  1.0f, 0.0f,
     -1.0f,  1.0f, 0.0f,
     1.0f, -1.0f, 0.0f,
-    1.0f,  1.0f, 0.0f,
+    1.0f,  1.0f, 0.0f
 };
 
-static void preprocess() {
+void phong() {
 	glClearColor(0.0, 0.0, 0.0, 1.0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -62,10 +62,20 @@ static void preprocess() {
 
 	GLuint m,v,p;
 	//Draw the models
-	glUseProgram(phongshader);
-	m = glGetUniformLocation(phongshader, "model");
-	v = glGetUniformLocation(phongshader, "view");
-	p = glGetUniformLocation(phongshader, "projection");
+
+	//For the bloom shader we only render the diffuse and ambient
+	if (shader == 4) {
+		glUseProgram(bloomshader);
+		m = glGetUniformLocation(bloomshader, "model");
+		v = glGetUniformLocation(bloomshader, "view");
+		p = glGetUniformLocation(bloomshader, "projection");
+	}
+	else {
+		glUseProgram(phongshader);
+		m = glGetUniformLocation(phongshader, "model");
+		v = glGetUniformLocation(phongshader, "view");
+		p = glGetUniformLocation(phongshader, "projection");
+	}
 
 	glUniformMatrix4fv(m, 1, GL_FALSE, &Model[0][0]);
 	glUniformMatrix4fv(v, 1, GL_FALSE, &View[0][0]);
@@ -114,7 +124,7 @@ void sharpen_kernel() {
 void gauss_kernel() {
 	//float *gauss_matrix = (float *) malloc (sizeof (float) * (2*radius+1) * (2*radius+1));
 	glm::mat3 kernel = glm::mat3(1.0);
-    float g_coeff = 1/(2*M_PI*pow((1.0f/3.0f),2));
+    float g_coeff = 1/(2*(float)M_PI*pow((1.0f/3.0f),2));
     float tsigmas = 2*pow((1.0f/3.0f),2);
     float mid = 3.0f/2.0f;
     float g_sum = 0.0;
@@ -135,7 +145,7 @@ void gauss_kernel() {
        }
     }
 	
-	float radius = 5.0f / 300.0f;
+	float radius = 2.0f/500.0f;
 
 	glUseProgram(kernelshader);
 	
@@ -159,7 +169,33 @@ void wave() {
 	glUniform1f(tID, t);
 }
 
-void choose_shader() {
+//we blur in 2 passes, this is the horizontal pass
+void bloom_blur_h() {
+	
+	float radius = 2.5f/WINDOW_WIDTH;
+
+	glUseProgram(bloomblurh);
+	
+	GLuint texID = glGetUniformLocation(bloomblurh, "texture");
+	GLuint rID = glGetUniformLocation(bloomblurh, "radius");
+	glUniform1f(rID, radius);
+	glUniform1i(texID, 0);
+}
+
+//we blur in 2 passes, this is the vertical pass
+void bloom_blur_v() {
+	
+	float radius = 2.5f/WINDOW_HEIGHT;
+
+	glUseProgram(bloomblurv);
+	
+	GLuint texID = glGetUniformLocation(bloomblurv, "texture");
+	GLuint rID = glGetUniformLocation(bloomblurv, "radius");
+	glUniform1f(rID, radius);
+	glUniform1i(texID, 0);
+}
+
+void choose_post_shader() {
 	switch (shader) {
 		case 0:
 			passthrough();
@@ -173,22 +209,26 @@ void choose_shader() {
 		case 3:
 			gauss_kernel();
 			break;
+		case 4:
+			break;
 		default:
-			wave();
+			passthrough();
 			break;
 	}
 }
 
-static void postprocess(){
+static void postprocess() {
+	//Render the quad
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glViewport(0,0,WINDOW_WIDTH,WINDOW_HEIGHT);
 	glClearColor(0.0, 0.0, 0.0, 1.0);
 	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
 	
-	choose_shader();
-
+	choose_post_shader();
 
 	// Bind our texture in Texture Unit 0
 	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, tex);
+	glBindTexture(GL_TEXTURE_2D, tex[0]);
 	glEnableVertexAttribArray(0);
 	glBindBuffer(GL_ARRAY_BUFFER, qvbo);
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
@@ -196,19 +236,63 @@ static void postprocess(){
 	glDrawArrays(GL_TRIANGLES, 0, 6);
 
 	glDisableVertexAttribArray(0);
+	glutSwapBuffers();
 }
 
-static void disp(void) {
-	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-	glViewport(0,0,WINDOW_WIDTH,WINDOW_HEIGHT);
-	preprocess();
+//Bloom consists of blurring the specular map
+void bloom() {
+	// Bind our texture in Texture Unit 0
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, tex[0]);
 
+/*	
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glViewport(0,0,WINDOW_WIDTH,WINDOW_HEIGHT);
+	glClearColor(0.0, 0.0, 0.0, 1.0);
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+*/
+
+	bloom_blur_h();
+	
+	glEnableVertexAttribArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, qvbo);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+	glDrawArrays(GL_TRIANGLES, 0, 6);
+	glDisableVertexAttribArray(0);
+	
 	//Render the quad
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	glViewport(0,0,WINDOW_WIDTH,WINDOW_HEIGHT);
-	postprocess();
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+	glClearColor(0.0, 0.0, 0.0, 1.0);
 
-	glutSwapBuffers();
+	
+	// Bind our texture in Texture Unit 0
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, tex[1]);
+
+
+	bloom_blur_v();
+
+	
+	glEnableVertexAttribArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, qvbo);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+	glDrawArrays(GL_TRIANGLES, 0, 6);
+	glDisableVertexAttribArray(0);
+}
+
+static void disp(void) {
+	
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glViewport(0,0,WINDOW_WIDTH,WINDOW_HEIGHT);
+
+	phong();
+
+	if (shader == 4)
+		bloom();
+	else
+		postprocess();
 
 	//unbind everything
 	glUseProgram(0);
@@ -237,6 +321,9 @@ static void keyboard(unsigned char key, int x, int y) {
 			break;
 		case '3':
 			shader = 3;
+			break;
+		case '4':
+			shader = 4;
 			break;
 		case 27:
 			exit(0);
@@ -424,6 +511,9 @@ static void init(void) {
 	phongshader = loadShaders("Shaders/phong.vs", "Shaders/phong.fs");
 	ppshader = loadShaders("Shaders/pp.vs", "Shaders/pp.fs");
 	kernelshader = loadShaders("Shaders/pp.vs", "Shaders/ks.fs");
+	bloomshader = loadShaders("Shaders/phong.vs", "Shaders/bloom.fs");
+	bloomblurh = loadShaders("Shaders/pp.vs", "Shaders/bloom_blur_h.fs");
+	bloomblurv = loadShaders("Shaders/pp.vs", "Shaders/bloom_blur_v.fs");
 
 	//Load the models
 	loadObj("Meshes/me100k.obj",vertices,normals,faces);
@@ -455,9 +545,13 @@ static void init(void) {
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
 	//The texture we're going to render to
-	glGenTextures(1, &tex);
-	glBindTexture(GL_TEXTURE_2D, tex);
-	glTexImage2D(GL_TEXTURE_2D, 0,GL_RGB, WINDOW_WIDTH, WINDOW_HEIGHT, 0,GL_RGB, GL_UNSIGNED_BYTE, 0);
+	glGenTextures(2, tex);
+	glBindTexture(GL_TEXTURE_2D, tex[0]);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, WINDOW_WIDTH, WINDOW_HEIGHT, 0,GL_RGBA, GL_UNSIGNED_BYTE, 0);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glBindTexture(GL_TEXTURE_2D, tex[1]);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, WINDOW_WIDTH, WINDOW_HEIGHT, 0,GL_RGBA, GL_UNSIGNED_BYTE, 0);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 
@@ -467,8 +561,9 @@ static void init(void) {
 	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, WINDOW_WIDTH, WINDOW_HEIGHT);
 	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthbuffer);
 
-	glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, tex, 0);
-	glDrawBuffers(1, DrawBuffers);
+	glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, tex[0], 0);
+	glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, tex[1], 0);
+	glDrawBuffers(2, drawBuffers);
 	// Always check that our framebuffer is ok
 	if(glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
 		exit(0);
@@ -486,7 +581,7 @@ int main(int argc, char** argv) {
 	glutInit (&argc, argv);
     //glutInitContextVersion(3,3);
     //glutInitContextProfile(GLUT_CORE_PROFILE);
-    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB| GLUT_MULTISAMPLE);
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_MULTISAMPLE);
 	glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
 	glutInitWindowPosition(0,0);
 	glutCreateWindow("SPH");	

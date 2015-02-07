@@ -28,8 +28,11 @@ void main(){
 	vec3 spec = light_specular * clamp(mat_specular*pow(max(phong_intensity, 0.0),mat_shininess) ,0.0, 1.0);
 
 	pixcolor += light_ambient * mat_ambient +
-			    light_diffuse * clamp(mat_diffuse*max(intensity, 0.0), 0.0, 1.0) +
-				spec;
+			    light_diffuse * clamp(mat_diffuse*max(intensity, 0.0), 0.0, 1.0);
+
+	float bloom = 0.0;
+	if (spec.x > 0.0)
+		bloom = spec.x;
 	
-	color = vec4(pixcolor,1.0);
+	color = vec4(pixcolor,bloom);
 }
